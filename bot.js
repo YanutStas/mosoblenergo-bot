@@ -24,6 +24,12 @@ app.post("/notifyError", (req, res) => {
   res.status(200).json({ success: true });
 });
 
+bot.on('message', (ctx) => {
+  console.log("Message from chat:", ctx.chat.id);
+  ctx.reply(`Ваш chatId: ${ctx.chat.id}`);
+});
+
+
 // Запускаем бота
 bot
   .launch()
