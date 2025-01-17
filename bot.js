@@ -1,52 +1,46 @@
 require("dotenv").config();
 const express = require("express");
-const { createBot, notifyAll } = require("./botLogic");
+const { Telegraf } = require("telegraf");
 
-// Считываем токен бота
 const botToken = process.env.BOT_TOKEN;
+const chatId = process.env.MY_CHAT_ID; // ← Жёстко прописали
+
 if (!botToken) {
-  throw new Error(
-    "BOT_TOKEN не найден в .env! Проверьте, что .env существует и там прописан BOT_TOKEN="
-  );
+  throw new Error("BOT_TOKEN не найден в .env!");
+}
+if (!chatId) {
+  throw new Error("MY_CHAT_ID не задан в .env!");
 }
 
-const bot = createBot(botToken);
+// Инициализируем бота
+const bot = new Telegraf(botToken);
 
+// (Можно оставить /start для теста)
+bot.start((ctx) => ctx.reply("Привет, я бот для уведомлений о падении 1С!"));
+
+// Поднимаем Express
 const app = express();
 app.use(express.json());
 
 // Эндпоинт для уведомления об ошибке 1С
-// Пример: POST http://5.35.9.42:3001/notifyError
 app.post("/notifyError", (req, res) => {
-  const { message } = req.body;
-  // Уведомляем всех подписчиков
-  notifyAll(bot, message || "Произошла ошибка в 1С!");
-  res.status(200).json({ success: true });
+  const { message } = req.body || {};
+  // Рассылаем в один жёстко прописанный chatId
+  bot.telegram.sendMessage(chatId, message || "Ошибка в 1С!");
+  res.json({ success: true });
 });
 
-bot.on('message', (ctx) => {
-  console.log("Message from chat:", ctx.chat.id);
-  ctx.reply(`Ваш chatId: ${ctx.chat.id}`);
+// Запуск бота
+bot.launch().then(() => {
+  console.log("Бот успешно запущен!");
 });
 
-
-// Запускаем бота
-bot
-  .launch()
-  .then(() => {
-    console.log("Бот успешно запущен!");
-  })
-  .catch((err) => {
-    console.error("Ошибка при запуске бота:", err);
-  });
-
-// Запускаем http-сервер на порту 3001
+// Слушаем порт 3001
 app.listen(3001, "0.0.0.0", () => {
   console.log("Bot server listening on port 3001");
 });
 
-
-// Корректная остановка бота при SIGINT/SIGTERM
+// Остановка
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
