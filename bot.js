@@ -2,47 +2,140 @@ require("dotenv").config();
 const express = require("express");
 const { Telegraf } = require("telegraf");
 
+// 1. Считываем токен и список ChatID из .env
 const botToken = process.env.BOT_TOKEN;
-const chatId = process.env.MY_CHAT_ID; // ← Жёстко прописали
+const chatIdsEnv = process.env.CHAT_IDS;
 
+// Проверяем наличие
 if (!botToken) {
-  throw new Error("BOT_TOKEN не найден в .env!");
+  throw new Error("BOT_TOKEN не найден в .env! Добавьте BOT_TOKEN=...");
 }
-if (!chatId) {
-  throw new Error("MY_CHAT_ID не задан в .env!");
+if (!chatIdsEnv) {
+  throw new Error(
+    "CHAT_IDS не найдены в .env! Добавьте CHAT_IDS=630763354,12345,..."
+  );
 }
 
-// Инициализируем бота
+// 2. Превращаем строку в массив чисел
+// Например, "630763354,111111111" → ["630763354","111111111"] → [630763354,111111111]
+const chatIds = chatIdsEnv
+  .split(",")
+  .map((id) => id.trim())
+  .map((id) => Number(id));
+
+// Инициализируем бота Telegraf
 const bot = new Telegraf(botToken);
 
-// (Можно оставить /start для теста)
-bot.start((ctx) => ctx.reply("Привет, я бот для уведомлений о падении 1С!"));
+// Команда /start (чисто для проверки живости)
+bot.start((ctx) => {
+  ctx.reply(
+    "Добрый день! Я бот для уведомлений о сбоях в 1С.\nПадение 1С будет автоматически зафиксировано и прислано в этот чат."
+  );
+});
 
-// Поднимаем Express
+// Поднимаем Express для /notifyError
 const app = express();
 app.use(express.json());
 
 // Эндпоинт для уведомления об ошибке 1С
 app.post("/notifyError", (req, res) => {
+  // Что угодно прилетит в body.message — бэкенд там напишет "502 Bad Gateway"
+  // или "Timeout connecting to 1C" и т.д.
   const { message } = req.body || {};
-  // Рассылаем в один жёстко прописанный chatId
-  bot.telegram.sendMessage(chatId, message || "Ошибка в 1С!");
-  res.json({ success: true });
+
+  // Получаем дату в удобном формате: DD.MM.YYYY HH:mm:ss
+  const now = new Date();
+  const pad = (num) => String(num).padStart(2, "0"); // вспомогательная функция для нуля впереди
+  const day = pad(now.getDate());
+  const month = pad(now.getMonth() + 1);
+  const year = now.getFullYear();
+  const hours = pad(now.getHours());
+  const minutes = pad(now.getMinutes());
+  const seconds = pad(now.getSeconds());
+  const ms = String(now.getMilliseconds()).padStart(3, "0"); // чтобы и миллисекунды показать
+
+  const formattedTime = `${day}.${month}.${year} ${hours}:${minutes}:${seconds}.${ms}`;
+
+  // Собираем более формальный текст
+  const textToSend = message
+    ? `Ошибка в 1С:\nВремя: ${formattedTime}\nОписание: ${message}`
+    : `Ошибка в 1С:\nВремя: ${formattedTime}\nОписание: Неизвестная ошибка.`;
+
+  // Рассылаем сообщение всем ChatID из массива
+  chatIds.forEach((id) => {
+    bot.telegram.sendMessage(id, textToSend).catch((err) => {
+      console.error(`Не удалось отправить сообщение в чат ${id}:`, err);
+    });
+  });
+
+  // Возвращаем ответ
+  return res.json({ success: true });
 });
 
 // Запуск бота
-bot.launch().then(() => {
-  console.log("Бот успешно запущен!");
-});
+bot
+  .launch()
+  .then(() => {
+    console.log("Бот успешно запущен!");
+  })
+  .catch((err) => {
+    console.error("Ошибка при запуске бота:", err);
+  });
 
 // Слушаем порт 3001
 app.listen(3001, "0.0.0.0", () => {
   console.log("Bot server listening on port 3001");
 });
 
-// Остановка
+// Корректная остановка
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+
+// require("dotenv").config();
+// const express = require("express");
+// const { Telegraf } = require("telegraf");
+
+// const botToken = process.env.BOT_TOKEN;
+// const chatId = process.env.MY_CHAT_ID; // ← Жёстко прописали
+
+// if (!botToken) {
+//   throw new Error("BOT_TOKEN не найден в .env!");
+// }
+// if (!chatId) {
+//   throw new Error("MY_CHAT_ID не задан в .env!");
+// }
+
+// // Инициализируем бота
+// const bot = new Telegraf(botToken);
+
+// // (Можно оставить /start для теста)
+// bot.start((ctx) => ctx.reply("Привет, я бот для уведомлений о падении 1С!"));
+
+// // Поднимаем Express
+// const app = express();
+// app.use(express.json());
+
+// // Эндпоинт для уведомления об ошибке 1С
+// app.post("/notifyError", (req, res) => {
+//   const { message } = req.body || {};
+//   // Рассылаем в один жёстко прописанный chatId
+//   bot.telegram.sendMessage(chatId, message || "Ошибка в 1С!");
+//   res.json({ success: true });
+// });
+
+// // Запуск бота
+// bot.launch().then(() => {
+//   console.log("Бот успешно запущен!");
+// });
+
+// // Слушаем порт 3001
+// app.listen(3001, "0.0.0.0", () => {
+//   console.log("Bot server listening on port 3001");
+// });
+
+// // Остановка
+// process.once("SIGINT", () => bot.stop("SIGINT"));
+// process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
 // require("dotenv").config();
 // const { Telegraf } = require("telegraf");
