@@ -4,3 +4,5 @@ logs/
 *.log
 dist/
 build/
+yarn.lock
+subscribers.json

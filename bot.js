@@ -10,10 +10,8 @@ if (!botToken) {
   );
 }
 
-// Создаём бота
 const bot = createBot(botToken);
 
-// Настраиваем Express
 const app = express();
 app.use(express.json());
 
@@ -37,9 +35,10 @@ bot
   });
 
 // Запускаем http-сервер на порту 3001
-app.listen(3001, () => {
+app.listen(3001, "0.0.0.0", () => {
   console.log("Bot server listening on port 3001");
 });
+
 
 // Корректная остановка бота при SIGINT/SIGTERM
 process.once("SIGINT", () => bot.stop("SIGINT"));
