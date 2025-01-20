@@ -2,6 +2,38 @@ require("dotenv").config();
 const express = require("express");
 const { Telegraf } = require("telegraf");
 
+// ----- Антиспам кэш -----
+const recentErrors = {}; // { [errorText: string]: number } — время (timestamp) последней отправки
+// const CACHE_MINUTES = 30;
+const CACHE_MINUTES = 10 / 60; // = 0.1666... ~ 10 секунд
+
+/**
+ * Проверяем, можно ли отправить эту ошибку (нет ли антиспама)
+ * @param {string} errorText
+ * @returns {boolean} true, если нужно отправить
+ */
+function shouldSendError(errorText) {
+  const now = Date.now();
+  if (!recentErrors[errorText]) {
+    // Ещё не отправляли такую ошибку
+    return true;
+  }
+  const lastTime = recentErrors[errorText];
+  const diffMinutes = (now - lastTime) / 1000 / 60;
+  // Разрешаем снова отправлять, если прошло больше CACHE_MINUTES
+  return diffMinutes > CACHE_MINUTES;
+}
+
+/**
+ * Фиксируем время отправки ошибки (чтобы не спамить повторно)
+ * @param {string} errorText
+ */
+function markErrorSent(errorText) {
+  recentErrors[errorText] = Date.now();
+}
+
+// -----------------------------------------------
+
 // 1. Считываем токен и список ChatID из .env
 const botToken = process.env.BOT_TOKEN;
 const chatIdsEnv = process.env.CHAT_IDS;
@@ -17,7 +49,6 @@ if (!chatIdsEnv) {
 }
 
 // 2. Превращаем строку в массив чисел
-// Например, "630763354,111111111" → ["630763354","111111111"] → [630763354,111111111]
 const chatIds = chatIdsEnv
   .split(",")
   .map((id) => id.trim())
@@ -26,10 +57,11 @@ const chatIds = chatIdsEnv
 // Инициализируем бота Telegraf
 const bot = new Telegraf(botToken);
 
-// Команда /start (чисто для проверки живости)
+// Команда /start (чисто для проверки бота)
 bot.start((ctx) => {
   ctx.reply(
-    "Добрый день! Я бот для уведомлений о сбоях в 1С.\nПадение 1С будет автоматически зафиксировано и прислано в этот чат."
+    "Добрый день! Я бот для уведомлений о сбоях в 1С.\n" +
+      "Если 1С упадёт, я пришлю сообщение в этот чат (с антиспам-фильтром)."
   );
 });
 
@@ -39,27 +71,32 @@ app.use(express.json());
 
 // Эндпоинт для уведомления об ошибке 1С
 app.post("/notifyError", (req, res) => {
-  // Что угодно прилетит в body.message — бэкенд там напишет "502 Bad Gateway"
-  // или "Timeout connecting to 1C" и т.д.
   const { message } = req.body || {};
 
-  // Получаем дату в удобном формате: DD.MM.YYYY HH:mm:ss
+  // Текущее время в удобном формате
   const now = new Date();
-  const pad = (num) => String(num).padStart(2, "0"); // вспомогательная функция для нуля впереди
+  const pad = (num) => String(num).padStart(2, "0");
   const day = pad(now.getDate());
   const month = pad(now.getMonth() + 1);
   const year = now.getFullYear();
   const hours = pad(now.getHours());
   const minutes = pad(now.getMinutes());
   const seconds = pad(now.getSeconds());
-  const ms = String(now.getMilliseconds()).padStart(3, "0"); // чтобы и миллисекунды показать
-
+  const ms = String(now.getMilliseconds()).padStart(3, "0");
   const formattedTime = `${day}.${month}.${year} ${hours}:${minutes}:${seconds}.${ms}`;
 
-  // Собираем более формальный текст
-  const textToSend = message
-    ? `Ошибка в 1С:\nВремя: ${formattedTime}\nОписание: ${message}`
-    : `Ошибка в 1С:\nВремя: ${formattedTime}\nОписание: Неизвестная ошибка.`;
+  // Если в body пришло message, используем его, иначе — "Неизвестная ошибка".
+  const errorText = message || "Неизвестная ошибка.";
+
+  // Формируем сообщение для Телеграм
+  const textToSend =
+    `Ошибка в 1С:\n` + `Время: ${formattedTime}\n` + `Описание: ${errorText}`;
+
+  // ---- Антиспам-проверка ----
+  if (!shouldSendError(errorText)) {
+    console.log("Повторная ошибка (антиспам) — не отправляем в Телеграм");
+    return res.json({ success: true, skippedByAntiSpam: true });
+  }
 
   // Рассылаем сообщение всем ChatID из массива
   chatIds.forEach((id) => {
@@ -67,6 +104,9 @@ app.post("/notifyError", (req, res) => {
       console.error(`Не удалось отправить сообщение в чат ${id}:`, err);
     });
   });
+
+  // Отмечаем, что мы отправили эту ошибку (запоминаем время)
+  markErrorSent(errorText);
 
   // Возвращаем ответ
   return res.json({ success: true });
@@ -90,6 +130,99 @@ app.listen(3001, "0.0.0.0", () => {
 // Корректная остановка
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+
+// require("dotenv").config();
+// const express = require("express");
+// const { Telegraf } = require("telegraf");
+
+// // 1. Считываем токен и список ChatID из .env
+// const botToken = process.env.BOT_TOKEN;
+// const chatIdsEnv = process.env.CHAT_IDS;
+
+// // Проверяем наличие
+// if (!botToken) {
+//   throw new Error("BOT_TOKEN не найден в .env! Добавьте BOT_TOKEN=...");
+// }
+// if (!chatIdsEnv) {
+//   throw new Error(
+//     "CHAT_IDS не найдены в .env! Добавьте CHAT_IDS=630763354,12345,..."
+//   );
+// }
+
+// // 2. Превращаем строку в массив чисел
+// // Например, "630763354,111111111" → ["630763354","111111111"] → [630763354,111111111]
+// const chatIds = chatIdsEnv
+//   .split(",")
+//   .map((id) => id.trim())
+//   .map((id) => Number(id));
+
+// // Инициализируем бота Telegraf
+// const bot = new Telegraf(botToken);
+
+// // Команда /start (чисто для проверки живости)
+// bot.start((ctx) => {
+//   ctx.reply(
+//     "Добрый день! Я бот для уведомлений о сбоях в 1С.\nПадение 1С будет автоматически зафиксировано и прислано в этот чат."
+//   );
+// });
+
+// // Поднимаем Express для /notifyError
+// const app = express();
+// app.use(express.json());
+
+// // Эндпоинт для уведомления об ошибке 1С
+// app.post("/notifyError", (req, res) => {
+//   // Что угодно прилетит в body.message — бэкенд там напишет "502 Bad Gateway"
+//   // или "Timeout connecting to 1C" и т.д.
+//   const { message } = req.body || {};
+
+//   // Получаем дату в удобном формате: DD.MM.YYYY HH:mm:ss
+//   const now = new Date();
+//   const pad = (num) => String(num).padStart(2, "0"); // вспомогательная функция для нуля впереди
+//   const day = pad(now.getDate());
+//   const month = pad(now.getMonth() + 1);
+//   const year = now.getFullYear();
+//   const hours = pad(now.getHours());
+//   const minutes = pad(now.getMinutes());
+//   const seconds = pad(now.getSeconds());
+//   const ms = String(now.getMilliseconds()).padStart(3, "0"); // чтобы и миллисекунды показать
+
+//   const formattedTime = `${day}.${month}.${year} ${hours}:${minutes}:${seconds}.${ms}`;
+
+//   // Собираем более формальный текст
+//   const textToSend = message
+//     ? `Ошибка в 1С:\nВремя: ${formattedTime}\nОписание: ${message}`
+//     : `Ошибка в 1С:\nВремя: ${formattedTime}\nОписание: Неизвестная ошибка.`;
+
+//   // Рассылаем сообщение всем ChatID из массива
+//   chatIds.forEach((id) => {
+//     bot.telegram.sendMessage(id, textToSend).catch((err) => {
+//       console.error(`Не удалось отправить сообщение в чат ${id}:`, err);
+//     });
+//   });
+
+//   // Возвращаем ответ
+//   return res.json({ success: true });
+// });
+
+// // Запуск бота
+// bot
+//   .launch()
+//   .then(() => {
+//     console.log("Бот успешно запущен!");
+//   })
+//   .catch((err) => {
+//     console.error("Ошибка при запуске бота:", err);
+//   });
+
+// // Слушаем порт 3001
+// app.listen(3001, "0.0.0.0", () => {
+//   console.log("Bot server listening on port 3001");
+// });
+
+// // Корректная остановка
+// process.once("SIGINT", () => bot.stop("SIGINT"));
+// process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
 // require("dotenv").config();
 // const express = require("express");
